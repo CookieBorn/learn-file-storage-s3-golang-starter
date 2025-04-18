@@ -6,3 +6,4 @@ samples/
 usefulCommands.txt
 Dockerfile
 dev.sh
+.aws
