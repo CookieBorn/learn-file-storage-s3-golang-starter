@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"fmt"
 	"io"
 	"mime"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -136,7 +139,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	videoURL := "https://" + cfg.s3Bucket + ".s3." + cfg.s3Region + ".amazonaws.com/" + fileKey
+	videoURL := cfg.s3CfDistribution + "/" + fileKey
 
 	updateVideoData := database.Video{
 		ID:                videoData.ID,
@@ -152,4 +155,45 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		respondWithError(w, http.StatusBadRequest, "Update video error", err)
 		return
 	}
+}
+
+func generatePresignedURL(s3Client *s3.Client, bucket, key string, expireTime time.Duration) (string, error) {
+	preClient := s3.NewPresignClient(s3Client)
+	resExp := time.Now().Add(expireTime)
+	params := s3.GetObjectInput{
+		Bucket:          &bucket,
+		Key:             &key,
+		ResponseExpires: &resExp,
+	}
+	opt := s3.WithPresignExpires(expireTime)
+	pre, err := preClient.PresignGetObject(context.Background(), &params, opt)
+	if err != nil {
+		return "", err
+	}
+	return pre.URL, nil
+}
+
+func (cfg *apiConfig) dbVideoToSignedVideo(video database.Video) (database.Video, error) {
+	if video.VideoURL == nil {
+		return video, nil
+	}
+	if *video.VideoURL == "" {
+		return video, fmt.Errorf("Missing URL error")
+	}
+	words := strings.Split(*video.VideoURL, ",")
+	if len(words) < 2 {
+		return video, fmt.Errorf("Split URL error")
+	}
+	if cfg.s3client == nil {
+		return video, fmt.Errorf("S3 client not initialized")
+	}
+	url, err := generatePresignedURL(cfg.s3client, words[0], words[1], time.Hour)
+	if err != nil {
+		return video, err
+	}
+
+	result := video
+	result.VideoURL = &url
+
+	return result, nil
 }
